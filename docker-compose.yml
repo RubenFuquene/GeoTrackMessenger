@@ -1,0 +1,115 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database with PostGIS
+  db:
+    image: postgis/postgis:15-3.3
+    environment:
+      POSTGRES_DB: geotrackmessenger_db
+      POSTGRES_USER: geotrack_user
+      POSTGRES_PASSWORD: geotrack_password
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geotrack_user -d geotrackmessenger_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - geotrack-network
+
+  # Redis for caching and background tasks
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - geotrack-network
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://geotrack_user:geotrack_password@db:5432/geotrackmessenger_db
+      REDIS_URL: redis://redis:6379
+      SECRET_KEY: your-secret-key-change-in-production
+      DEBUG: "false"
+      ALLOWED_ORIGINS: '["http://localhost:3000", "http://localhost:8080"]'
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./backend:/app
+    networks:
+      - geotrack-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Telegram Bot
+  telegram-bot:
+    build:
+      context: ./telegram_bot
+      dockerfile: Dockerfile
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      BACKEND_URL: http://backend:8000/api/v1
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./telegram_bot:/app
+    networks:
+      - geotrack-network
+    restart: unless-stopped
+
+  # Web Panel
+  web-panel:
+    build:
+      context: ./web_panel
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - geotrack-network
+
+  # Nginx Reverse Proxy (optional, for production)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - backend
+      - web-panel
+    networks:
+      - geotrack-network
+    profiles:
+      - production
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  geotrack-network:
+    driver: bridge

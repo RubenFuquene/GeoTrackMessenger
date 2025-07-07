@@ -1,0 +1,54 @@
+services:
+  # PostgreSQL Database with PostGIS
+  db:
+    image: postgis/postgis:15-3.3
+    environment:
+      POSTGRES_DB: geotrackmessenger_db
+      POSTGRES_USER: geotrack_user
+      POSTGRES_PASSWORD: geotrack_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - geotrack-network
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - geotrack-network
+
+  # Backend API (Development mode)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://geotrack_user:geotrack_password@db:5432/geotrackmessenger_db
+      REDIS_URL: redis://redis:6379
+      SECRET_KEY: dev-secret-key
+      DEBUG: "true"
+      ALLOWED_ORIGINS: '["http://localhost:3000", "http://localhost:8080"]'
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./backend:/app
+    networks:
+      - geotrack-network
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  geotrack-network:
+    driver: bridge
